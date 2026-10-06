@@ -7,7 +7,7 @@ use tauri_plugin_updater::UpdaterExt;
 
 use crate::models::{
     AccountSession, AppSettings, Backlink, GraphData, NoteSummary, NoteView, SearchHit, TagInfo,
-    TreeNode, UpdateCheckResult,
+    TransferResult, TreeNode, UpdateCheckResult, VaultProject,
 };
 use crate::parse::parse_note;
 use crate::session::current_session;
@@ -33,8 +33,9 @@ fn open_root(app: AppHandle, state: &AppState, root: PathBuf) -> Result<String, 
     if let Some(previous) = inner.vault.take() {
         previous.stop.store(true, Ordering::Relaxed);
     }
-    let path = root.to_string_lossy().to_string();
+    let path = settings::plain_path(&root);
     inner.settings.last_vault_path = path.clone();
+    settings::remember_project(&mut inner.settings, &path);
     settings::save(&inner.settings_path, &inner.settings)?;
     inner.vault = Some(VaultRuntime {
         vault,
@@ -95,6 +96,73 @@ pub fn vault_create(
     }
     std::fs::create_dir_all(&root).map_err(|err| err.to_string())?;
     open_root(app, &state, root)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn vault_close(state: State<AppState>) -> Result<(), String> {
+    let mut inner = lock_state(&state)?;
+    if let Some(previous) = inner.vault.take() {
+        previous.stop.store(true, Ordering::Relaxed);
+    }
+    inner.settings.last_vault_path.clear();
+    settings::save(&inner.settings_path, &inner.settings)?;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_rename(state: State<AppState>, path: String, name: String) -> Result<Vec<VaultProject>, String> {
+    let mut inner = lock_state(&state)?;
+    settings::rename_project(&mut inner.settings, &path, &name)?;
+    settings::save(&inner.settings_path, &inner.settings)?;
+    Ok(inner.settings.projects.clone())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn project_forget(state: State<AppState>, path: String) -> Result<Vec<VaultProject>, String> {
+    let mut inner = lock_state(&state)?;
+    let current = if inner.vault.is_some() {
+        inner.settings.last_vault_path.clone()
+    } else {
+        String::new()
+    };
+    if settings::same_location(&current, &path) {
+        if let Some(previous) = inner.vault.take() {
+            previous.stop.store(true, Ordering::Relaxed);
+        }
+        inner.settings.last_vault_path.clear();
+    }
+    settings::forget_project(&mut inner.settings, &path);
+    settings::save(&inner.settings_path, &inner.settings)?;
+    Ok(inner.settings.projects.clone())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn files_import(
+    state: State<AppState>,
+    source_paths: Vec<String>,
+    parent: String,
+) -> Result<TransferResult, String> {
+    let mut inner = lock_state(&state)?;
+    let runtime = inner.vault.as_mut().ok_or("Хранилище не открыто")?;
+    runtime.vault.import_paths(&source_paths, &parent)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn files_export(
+    state: State<AppState>,
+    relative_paths: Vec<String>,
+    destination: String,
+) -> Result<TransferResult, String> {
+    let inner = lock_state(&state)?;
+    let runtime = inner.vault.as_ref().ok_or("Хранилище не открыто")?;
+    runtime.vault.export_paths(&relative_paths, &destination)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn note_export(state: State<AppState>, path: String, destination: String) -> Result<(), String> {
+    let mut inner = lock_state(&state)?;
+    let runtime = inner.vault.as_mut().ok_or("Хранилище не открыто")?;
+    runtime.vault.export_note_file(&path, &destination)
 }
 
 #[tauri::command(rename_all = "snake_case")]

@@ -28,6 +28,8 @@ pub struct AppSettings {
     /// локальный IPC Tauri не отвечает по HTTP и CORS не применяет.
     #[serde(default)]
     pub allowed_origins: Vec<String>,
+    #[serde(default)]
+    pub projects: Vec<VaultProject>,
 }
 
 impl Default for AppSettings {
@@ -39,8 +41,23 @@ impl Default for AppSettings {
             update_manifest_url: String::new(),
             last_vault_path: String::new(),
             allowed_origins: Vec::new(),
+            projects: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultProject {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TransferResult {
+    pub copied: Vec<String>,
+    pub skipped: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,5 +1,5 @@
 import { use_app } from "../state/use_app";
-import { IconBookmark, IconDaily, IconFiles, IconGraph, IconSearch, IconSettings } from "./Icons";
+import { IconBookmark, IconDaily, IconFiles, IconGraph, IconProjects, IconSearch, IconSettings } from "./Icons";
 
 export function Ribbon() {
   const app = use_app();
@@ -41,6 +41,14 @@ export function Ribbon() {
         <IconDaily />
       </button>
       <div className="ribbon-spacer" />
+      <button
+        type="button"
+        className={app.projects_open ? "ribbon-button active" : "ribbon-button"}
+        title="Проекты"
+        onClick={app.open_projects}
+      >
+        <IconProjects />
+      </button>
       <button type="button" className="ribbon-button" title="Настройки" onClick={app.open_settings}>
         <IconSettings />
       </button>

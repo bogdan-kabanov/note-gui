@@ -7,6 +7,17 @@ export type app_settings = {
   update_manifest_url: string;
   last_vault_path: string;
   allowed_origins: string[];
+  projects: vault_project[];
+};
+
+export type vault_project = {
+  name: string;
+  path: string;
+};
+
+export type transfer_result = {
+  copied: string[];
+  skipped: string[];
 };
 
 export type account_session = {
@@ -82,7 +93,7 @@ export type name_modal_state = {
   title: string;
   label: string;
   initial: string;
-  kind: "note" | "folder" | "rename" | "vault";
+  kind: "note" | "folder" | "rename" | "vault" | "project";
   parent_path: string;
   target_path: string;
   vault_parent: string;

@@ -46,3 +46,7 @@ export function IconClose({ size }: icon_props) {
 export function IconPlus({ size }: icon_props) {
   return svg("M12 5v14M5 12h14", size);
 }
+
+export function IconProjects({ size }: icon_props) {
+  return svg("M3 7.5h6l1.5 1.5H21v8H3zM3 7.5V6h5l1.5 1.5", size);
+}

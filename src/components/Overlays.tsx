@@ -10,6 +10,7 @@ export function Overlays() {
       {app.command_palette_open ? <CommandPalette /> : null}
       {app.quick_switcher_open ? <QuickSwitcher /> : null}
       {app.settings_open ? <SettingsModal /> : null}
+      {app.projects_open ? <ProjectsModal /> : null}
       {app.name_modal ? <NameModal /> : null}
       {app.confirm_delete ? (
         <div className="overlay">
@@ -45,6 +46,11 @@ function CommandPalette() {
     { id: "search", title: "Поиск", run: () => app.set_left_panel("search") },
     { id: "bookmarks", title: "Закладки", run: () => app.set_left_panel("bookmarks") },
     { id: "files", title: "Файлы", run: () => app.set_left_panel("files") },
+    { id: "projects", title: "Проекты", run: app.open_projects },
+    { id: "import_files", title: "Импорт файлов", run: () => void app.import_files() },
+    { id: "import_folder", title: "Импорт папки", run: () => void app.import_folder() },
+    { id: "export_project", title: "Экспорт проекта", run: () => void app.export_project() },
+    { id: "export_note", title: "Экспорт текущей заметки", run: () => void app.export_current_note() },
     { id: "editor", title: "Вернуться к редактору", run: () => app.set_center_view("editor") },
     { id: "left", title: "Показать или скрыть левую панель", run: app.toggle_left },
     { id: "right", title: "Показать или скрыть правую панель", run: app.toggle_right },
@@ -140,6 +146,61 @@ function QuickSwitcher() {
   );
 }
 
+function ProjectsModal() {
+  const app = use_app();
+  return (
+    <div className="overlay" onMouseDown={app.close_projects}>
+      <div className="modal wide" onMouseDown={(event) => event.stopPropagation()}>
+        <h2>Проекты</h2>
+        <p>Каждый проект — отдельная папка с заметками. Файлы на диске не удаляются, когда проект убирают из списка.</p>
+        <div className="project-list">
+          {app.projects.length === 0 ? <p className="empty-copy">Пока нет сохранённых проектов</p> : null}
+          {app.projects.map((project) => {
+            const current =
+              app.vault_path !== null &&
+              project.path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() ===
+                app.vault_path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+            return (
+              <div key={project.path} className="project-line">
+                <button
+                  type="button"
+                  className={current ? "project-row active" : "project-row"}
+                  onClick={() => void app.open_project(project.path)}
+                >
+                  <span className="result-title">{project.name}</span>
+                  <span className="meta">{project.path}</span>
+                </button>
+                <button type="button" className="text-button" onClick={() => app.ask_rename_project(project)}>
+                  Имя
+                </button>
+                <button type="button" className="text-button" onClick={() => void app.forget_project(project.path)}>
+                  Убрать
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="primary-button" onClick={() => void app.open_vault_dialog()}>
+            Открыть папку
+          </button>
+          <button type="button" className="text-button" onClick={() => void app.create_vault_dialog()}>
+            Создать
+          </button>
+          {app.vault_path ? (
+            <button type="button" className="text-button" onClick={() => void app.close_project()}>
+              Закрыть текущий
+            </button>
+          ) : null}
+          <button type="button" className="text-button" onClick={app.close_projects}>
+            Закрыть
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsModal() {
   const app = use_app();
   return (
@@ -227,7 +288,7 @@ function NameModal() {
         </label>
         <div className="modal-actions">
           <button type="submit" className="primary-button">
-            {modal.kind === "rename" ? "Сохранить" : "Создать"}
+            {modal.kind === "rename" || modal.kind === "project" ? "Сохранить" : "Создать"}
           </button>
           <button type="button" className="text-button" onClick={app.close_name_modal}>
             Отмена

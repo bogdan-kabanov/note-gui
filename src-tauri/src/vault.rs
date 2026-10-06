@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::index::NoteIndex;
 use crate::models::{
-    Backlink, GraphData, NoteSummary, NoteView, SearchHit, TagInfo, TreeNode,
+    Backlink, GraphData, NoteSummary, NoteView, SearchHit, TagInfo, TransferResult, TreeNode,
 };
 use crate::parse::{apply_properties, parse_note};
 use crate::store::local_fs::{
-    join_relative, parent_relative, resolve_inside, sanitize_name, LocalFsStore,
+    join_relative, parent_relative, relative_path, resolve_inside, sanitize_name, LocalFsStore,
 };
 use crate::store::VaultStore;
 
@@ -196,6 +196,148 @@ impl Vault {
         Ok(self.bookmarks.clone())
     }
 
+    pub fn import_paths(&mut self, sources: &[String], parent: &str) -> Result<TransferResult, String> {
+        if sources.is_empty() {
+            return Err("Не выбраны файлы для импорта".into());
+        }
+        let parent_dir = resolve_inside(self.store.root(), parent)?;
+        if !parent_dir.is_dir() {
+            return Err("Папка назначения не найдена".into());
+        }
+        let vault_root = canonicalize_dir(self.store.root())?;
+        let mut result = TransferResult::default();
+        for source in sources {
+            let source_path = PathBuf::from(source);
+            if !source_path.exists() {
+                result.skipped.push(format!("{source}: не найден"));
+                continue;
+            }
+            let source_canon = canonicalize_dir(&source_path)?;
+            if source_path.is_dir() {
+                if source_canon == vault_root {
+                    result.skipped.push(format!("{source}: это текущий проект"));
+                    continue;
+                }
+                let parent_canon = canonicalize_dir(&parent_dir)?;
+                if parent_canon.starts_with(&source_canon) {
+                    result
+                        .skipped
+                        .push(format!("{source}: папка назначения внутри импортируемой папки"));
+                    continue;
+                }
+                let Some(folder_name) = source_path.file_name().map(|value| value.to_string_lossy().to_string()) else {
+                    result.skipped.push(format!("{source}: нет имени папки"));
+                    continue;
+                };
+                if folder_name.starts_with('.') || folder_name == ".note-gui" {
+                    result.skipped.push(format!("{folder_name}: служебная папка"));
+                    continue;
+                }
+                let destination = unique_path(&parent_dir, &folder_name);
+                copy_markdown_tree(&source_path, &destination, &mut result)?;
+            } else if is_markdown_name(&source_path) {
+                let file_name = source_path
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "заметка.md".into());
+                let destination = unique_path(&parent_dir, &file_name);
+                fs::copy(&source_path, &destination).map_err(|err| err.to_string())?;
+                result
+                    .copied
+                    .push(relative_path(self.store.root(), &destination)?);
+            } else {
+                result.skipped.push(format!("{source}: нужен файл .md"));
+            }
+        }
+        self.sync_index()?;
+        Ok(result)
+    }
+
+    pub fn export_paths(&self, relative_paths: &[String], destination: &str) -> Result<TransferResult, String> {
+        let destination_dir = PathBuf::from(destination);
+        if destination_dir.exists() && !destination_dir.is_dir() {
+            return Err("Для экспорта нужна папка".into());
+        }
+        fs::create_dir_all(&destination_dir).map_err(|err| err.to_string())?;
+        let vault_root = canonicalize_dir(self.store.root())?;
+        let destination_canon = canonicalize_dir(&destination_dir)?;
+        if destination_canon.starts_with(&vault_root) {
+            return Err("Нельзя экспортировать внутрь текущего проекта".into());
+        }
+        let mut result = TransferResult::default();
+        if relative_paths.is_empty() {
+            copy_markdown_tree(self.store.root(), &destination_dir, &mut result)?;
+            if result.copied.is_empty() {
+                result.skipped.clear();
+                result.skipped.push("В проекте нет markdown-файлов".into());
+            }
+            return Ok(result);
+        }
+        for relative in relative_paths {
+            let source = resolve_inside(self.store.root(), relative)?;
+            if !source.exists() {
+                result.skipped.push(format!("{relative}: не найден"));
+                continue;
+            }
+            if source.is_dir() {
+                let folder_name = source
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "папка".into());
+                let target = unique_path(&destination_dir, &folder_name);
+                copy_markdown_tree(&source, &target, &mut result)?;
+            } else if is_markdown_name(&source) {
+                let file_name = source
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "заметка.md".into());
+                let target = unique_path(&destination_dir, &file_name);
+                fs::copy(&source, &target).map_err(|err| err.to_string())?;
+                result.copied.push(target.to_string_lossy().to_string());
+            } else {
+                result.skipped.push(format!("{relative}: нужен файл .md"));
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn export_note_file(&mut self, path: &str, destination: &str) -> Result<(), String> {
+        let body = self.store.read_note(path)?;
+        let destination_path = PathBuf::from(destination);
+        if destination.trim().is_empty() {
+            return Err("Путь экспорта не задан".into());
+        }
+        if let Some(parent) = destination_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+        }
+        let vault_root = canonicalize_dir(self.store.root())?;
+        if let Some(parent) = destination_path.parent() {
+            if let Ok(parent_canon) = parent.canonicalize() {
+                if parent_canon.starts_with(&vault_root) {
+                    let file_name = destination_path
+                        .file_name()
+                        .ok_or("Нет имени файла")?
+                        .to_string_lossy()
+                        .to_string();
+                    let full = parent_canon.join(&file_name);
+                    let relative = full
+                        .strip_prefix(&vault_root)
+                        .map_err(|_| "Путь вне хранилища".to_string())?
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    if !is_markdown_name(Path::new(&relative)) {
+                        return Err("В проект можно записать только markdown".into());
+                    }
+                    self.write_note(&relative, &body)?;
+                    return Ok(());
+                }
+            }
+        }
+        fs::write(destination_path, body).map_err(|err| err.to_string())
+    }
+
     pub fn sync_index(&mut self) -> Result<(), String> {
         let mut files = Vec::new();
         collect_markdown(self.store.root(), self.store.root(), &mut files)?;
@@ -246,6 +388,72 @@ fn view_from(path: &str, body: &str) -> NoteView {
         headings: parsed.headings,
         word_count: parsed.word_count,
     }
+}
+
+fn canonicalize_dir(path: &Path) -> Result<PathBuf, String> {
+    path.canonicalize().map_err(|err| err.to_string())
+}
+
+fn is_markdown_name(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+}
+
+fn unique_path(dir: &Path, name: &str) -> PathBuf {
+    let plain = dir.join(name);
+    if !plain.exists() {
+        return plain;
+    }
+    let file_path = Path::new(name);
+    let stem = file_path
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| name.to_string());
+    let extension = file_path
+        .extension()
+        .map(|value| format!(".{}", value.to_string_lossy()))
+        .unwrap_or_default();
+    for index in 2..10_000 {
+        let candidate = dir.join(format!("{stem} {index}{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    plain
+}
+
+fn place_file(dest_dir: &Path, relative: &str) -> Result<PathBuf, String> {
+    let relative_path = PathBuf::from(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let parent = relative_path.parent().unwrap_or(Path::new(""));
+    let name = relative_path
+        .file_name()
+        .ok_or("Нет имени файла")?
+        .to_string_lossy()
+        .to_string();
+    let folder = dest_dir.join(parent);
+    fs::create_dir_all(&folder).map_err(|err| err.to_string())?;
+    Ok(unique_path(&folder, &name))
+}
+
+fn copy_markdown_tree(source: &Path, dest: &Path, result: &mut TransferResult) -> Result<(), String> {
+    let mut files = Vec::new();
+    collect_markdown(source, source, &mut files)?;
+    if files.is_empty() {
+        let label = source
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| source.display().to_string());
+        result.skipped.push(format!("{label}: нет markdown-файлов"));
+        return Ok(());
+    }
+    fs::create_dir_all(dest).map_err(|err| err.to_string())?;
+    for (relative, full) in files {
+        let target = place_file(dest, &relative)?;
+        fs::copy(&full, &target).map_err(|err| err.to_string())?;
+        result.copied.push(target.to_string_lossy().to_string());
+    }
+    Ok(())
 }
 
 fn load_bookmarks(path: &Path) -> Vec<String> {
@@ -306,14 +514,20 @@ fn ensure_markdown_name(name: &str) -> Result<String, String> {
 mod tests {
     use super::Vault;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_root() -> std::path::PathBuf {
+        static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        let root = std::env::temp_dir().join(format!("note-gui-{millis}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "note-gui-{millis}-{}-{seq}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
@@ -369,6 +583,54 @@ mod tests {
         let again = vault.open_daily().unwrap();
         assert_eq!(path, again);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn imports_exports_without_overwriting() {
+        let root = temp_root();
+        let outside = temp_root();
+        let mut vault = Vault::open(root.clone()).unwrap();
+        fs::write(outside.join("Импорт.md"), "# Импорт\n").unwrap();
+        fs::write(outside.join("заметка.txt"), "не markdown").unwrap();
+        let nested = outside.join("папка");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("Вложенная.md"), "# Вложенная\n").unwrap();
+
+        let file = outside.join("Импорт.md").to_string_lossy().to_string();
+        let imported = vault.import_paths(&[file.clone()], "").unwrap();
+        assert_eq!(imported.copied.len(), 1);
+        assert!(root.join("Импорт.md").is_file());
+        let again = vault.import_paths(&[file], "").unwrap();
+        assert_eq!(again.copied.len(), 1);
+        assert!(root.join("Импорт 2.md").is_file());
+
+        let folder = nested.to_string_lossy().to_string();
+        let from_folder = vault.import_paths(&[folder], "").unwrap();
+        assert_eq!(from_folder.copied.len(), 1);
+        assert!(root.join("папка").join("Вложенная.md").is_file());
+
+        let text = outside.join("заметка.txt").to_string_lossy().to_string();
+        let skipped = vault.import_paths(&[text], "").unwrap();
+        assert!(skipped.copied.is_empty());
+        assert!(!skipped.skipped.is_empty());
+
+        let destination = temp_root();
+        let exported = vault
+            .export_paths(&[], &destination.to_string_lossy())
+            .unwrap();
+        assert!(exported.copied.len() >= 3);
+        assert!(destination.join("Импорт.md").is_file());
+        assert!(destination.join("папка").join("Вложенная.md").is_file());
+        assert!(vault.export_paths(&[], &root.to_string_lossy()).is_err());
+
+        let copy_path = destination.join("копия.md");
+        vault
+            .export_note_file("Импорт.md", &copy_path.to_string_lossy())
+            .unwrap();
+        assert_eq!(fs::read_to_string(copy_path).unwrap(), "# Импорт\n");
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
+        let _ = fs::remove_dir_all(destination);
     }
 }
 

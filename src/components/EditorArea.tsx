@@ -70,6 +70,9 @@ function NotePane({ pane }: { pane: "main" | "split" }) {
           <button type="button" className={mode === "preview" ? "text-button active" : "text-button"} onClick={() => app.set_pane_mode(pane, "preview")}>
             Чтение
           </button>
+          <button type="button" className="text-button" disabled={!path} onClick={() => void app.export_current_note()}>
+            Экспорт
+          </button>
           <button
             type="button"
             className={bookmarked ? "icon-button active" : "icon-button"}
@@ -107,15 +110,25 @@ function EmptyVault() {
   const app = use_app();
   return (
     <div className="empty-vault">
-      <div className="empty-card">
+      <div className={app.projects.length > 0 ? "empty-card wide" : "empty-card"}>
         <h1>Записная книжка</h1>
-        <p>Откройте папку с markdown-заметками или создайте новое хранилище на диске.</p>
+        <p>Откройте папку с markdown-заметками или создайте новый проект на диске.</p>
+        {app.projects.length > 0 ? (
+          <div className="project-list">
+            {app.projects.map((project) => (
+              <button key={project.path} type="button" className="project-row" onClick={() => void app.open_project(project.path)}>
+                <span className="result-title">{project.name}</span>
+                <span className="meta">{project.path}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="modal-actions">
           <button type="button" className="primary-button" onClick={() => void app.open_vault_dialog()}>
             Открыть папку
           </button>
           <button type="button" className="text-button" onClick={() => void app.create_vault_dialog()}>
-            Создать хранилище
+            Создать проект
           </button>
         </div>
       </div>

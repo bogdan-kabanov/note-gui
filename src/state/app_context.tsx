@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppContext } from "./context";
 import * as api from "../services/vault_api";
@@ -17,8 +17,10 @@ import type {
   search_hit,
   tag_info,
   theme_mode,
+  transfer_result,
   tree_node,
   update_check_result,
+  vault_project,
   view_mode,
 } from "../types";
 
@@ -65,6 +67,20 @@ export type app_api = {
   backlinks: backlink[];
   update_result: update_check_result | null;
   scroll_line: number | null;
+  projects: vault_project[];
+  projects_open: boolean;
+  project_name: string;
+  open_projects: () => void;
+  close_projects: () => void;
+  open_project: (path: string) => Promise<void>;
+  close_project: () => Promise<void>;
+  forget_project: (path: string) => Promise<void>;
+  ask_rename_project: (project: vault_project) => void;
+  import_files: () => Promise<void>;
+  import_folder: () => Promise<void>;
+  export_project: () => Promise<void>;
+  export_path: (path: string) => Promise<void>;
+  export_current_note: () => Promise<void>;
   open_vault_dialog: () => Promise<void>;
   create_vault_dialog: () => Promise<void>;
   open_note: (path: string) => Promise<void>;
@@ -127,8 +143,38 @@ function parent_of(path: string): string {
 }
 
 function file_title(path: string): string {
-  const name = path.split("/").pop() ?? path;
+  const name = path.split("/").pop()?.split("\\").pop() ?? path;
   return name.replace(/\.md$/i, "");
+}
+
+function same_path(left: string, right: string): boolean {
+  const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
+function selected_paths(value: unknown): string[] {
+  if (typeof value === "string" && value.length > 0) {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+  }
+  return [];
+}
+
+function transfer_message(action: string, result: transfer_result): string {
+  if (result.copied.length === 0) {
+    return result.skipped[0] ?? `${action}: нечего переносить`;
+  }
+  if (result.skipped.length === 0) {
+    return `${action}: ${result.copied.length}`;
+  }
+  return `${action}: ${result.copied.length}, пропущено ${result.skipped.length}`;
+}
+
+function folder_name(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
 }
 
 const default_settings: app_settings = {
@@ -138,6 +184,7 @@ const default_settings: app_settings = {
   update_manifest_url: "",
   last_vault_path: "",
   allowed_origins: [],
+  projects: [],
 };
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -182,6 +229,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [update_result, set_update_result] = useState<update_check_result | null>(null);
   const [scroll_line, set_scroll_line] = useState<number | null>(null);
   const [selected_dir, set_selected_dir] = useState("");
+  const [projects, set_projects] = useState<vault_project[]>([]);
+  const [projects_open, set_projects_open] = useState(false);
   const actions_ref = useRef({
     ask_create_note: () => {},
     toggle_view_mode: () => {},
@@ -197,6 +246,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const focused_path = focused_pane === "split" ? split_path : active_path;
   const word_count = focused_path ? (views[focused_path]?.word_count ?? 0) : 0;
+  const project_name = vault_path
+    ? (projects.find((item) => same_path(item.path, vault_path))?.name ?? folder_name(vault_path))
+    : "";
 
   useEffect(() => {
     vault_path_ref.current = vault_path;
@@ -334,6 +386,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         set_readable_state(settings.readable_line_width);
         set_update_manifest_url(settings.update_manifest_url);
         set_allowed_origins(settings.allowed_origins);
+        set_projects(settings.projects);
         const session = await api.session_get();
         if (!cancelled) {
           set_session_mode(session.mode);
@@ -346,6 +399,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               return;
             }
             set_vault_path(opened);
+            await sync_projects();
             await refresh_indexes();
           } catch (error) {
             if (!cancelled) {
@@ -385,6 +439,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         set_settings_open(false);
         set_name_modal(null);
         set_confirm_delete(null);
+        set_projects_open(false);
         return;
       }
       if (!mod) {
@@ -429,6 +484,196 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }
 
+  async function sync_projects() {
+    const settings = await api.settings_get();
+    settings_ref.current = settings;
+    set_projects(settings.projects);
+  }
+
+  function reset_editor() {
+    set_tabs([]);
+    set_active_path(null);
+    set_split_path(null);
+    set_bodies({});
+    set_views({});
+    set_selected_dir("");
+    set_search_hits([]);
+    set_search_query_text("");
+    set_graph(null);
+    set_backlinks([]);
+    set_center_view("editor");
+  }
+
+  async function finish_open(opened: string) {
+    set_vault_path(opened);
+    reset_editor();
+    await sync_projects();
+    await refresh_indexes();
+    set_projects_open(false);
+    set_status_message("");
+  }
+
+  async function open_project(path: string) {
+    try {
+      const opened = await api.vault_open(path);
+      await finish_open(opened);
+    } catch (error) {
+      set_status_message(error_text(error));
+    }
+  }
+
+  async function close_project() {
+    try {
+      await api.vault_close();
+      set_vault_path(null);
+      reset_editor();
+      await sync_projects();
+      set_status_message("");
+    } catch (error) {
+      set_status_message(error_text(error));
+    }
+  }
+
+  async function forget_project(path: string) {
+    try {
+      const next = await api.project_forget(path);
+      settings_ref.current = { ...settings_ref.current, projects: next };
+      set_projects(next);
+      if (vault_path && same_path(vault_path, path)) {
+        set_vault_path(null);
+        reset_editor();
+      }
+    } catch (error) {
+      set_status_message(error_text(error));
+    }
+  }
+
+  function ask_rename_project(project: vault_project) {
+    set_name_modal({
+      title: "Название проекта",
+      label: "Имя в списке",
+      initial: project.name,
+      kind: "project",
+      parent_path: "",
+      target_path: project.path,
+      vault_parent: "",
+    });
+  }
+
+  async function import_files() {
+    if (!vault_path) {
+      set_status_message("Сначала откройте проект");
+      return;
+    }
+    const selected = await open({
+      title: "Импорт заметок",
+      multiple: true,
+      directory: false,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    const paths = selected_paths(selected);
+    if (paths.length === 0) {
+      return;
+    }
+    try {
+      const result = await api.files_import(paths, selected_dir);
+      await refresh_indexes();
+      set_status_message(transfer_message("Импортировано", result));
+    } catch (error) {
+      set_status_message(error_text(error));
+    }
+  }
+
+  async function import_folder() {
+    if (!vault_path) {
+      set_status_message("Сначала откройте проект");
+      return;
+    }
+    const selected = await open({
+      title: "Импорт папки с заметками",
+      directory: true,
+      multiple: false,
+    });
+    if (typeof selected !== "string") {
+      return;
+    }
+    try {
+      const result = await api.files_import([selected], selected_dir);
+      await refresh_indexes();
+      set_status_message(transfer_message("Импортировано", result));
+    } catch (error) {
+      set_status_message(error_text(error));
+    }
+  }
+
+  async function export_project() {
+    if (!vault_path) {
+      set_status_message("Сначала откройте проект");
+      return;
+    }
+    const selected = await open({
+      title: "Куда экспортировать проект",
+      directory: true,
+      multiple: false,
+    });
+    if (typeof selected !== "string") {
+      return;
+    }
+    try {
+      const result = await api.files_export([], selected);
+      set_status_message(transfer_message("Экспортировано", result));
+    } catch (error) {
+      set_status_message(error_text(error));
+    }
+  }
+
+  async function export_path(path: string) {
+    if (!vault_path) {
+      set_status_message("Сначала откройте проект");
+      return;
+    }
+    const selected = await open({
+      title: "Куда экспортировать",
+      directory: true,
+      multiple: false,
+    });
+    if (typeof selected !== "string") {
+      return;
+    }
+    try {
+      const result = await api.files_export([path], selected);
+      set_status_message(transfer_message("Экспортировано", result));
+    } catch (error) {
+      set_status_message(error_text(error));
+    }
+  }
+
+  async function export_current_note() {
+    const path = focused_path;
+    if (!path) {
+      set_status_message("Сначала откройте заметку");
+      return;
+    }
+    const body = bodies[path];
+    if (body !== undefined) {
+      await persist_body(path, body);
+    }
+    const destination = await save({
+      title: "Экспорт заметки",
+      defaultPath: `${file_title(path)}.md`,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (typeof destination !== "string" || destination.length === 0) {
+      return;
+    }
+    try {
+      await api.note_export(path, destination);
+      set_status_message("Заметка экспортирована");
+    } catch (error) {
+      set_status_message(error_text(error));
+    }
+  }
+
   async function open_vault_dialog() {
     const selected = await open({
       directory: true,
@@ -440,14 +685,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     try {
       const opened = await api.vault_open(selected);
-      set_vault_path(opened);
-      set_tabs([]);
-      set_active_path(null);
-      set_split_path(null);
-      set_bodies({});
-      set_views({});
-      await refresh_indexes();
-      set_status_message("");
+      await finish_open(opened);
     } catch (error) {
       set_status_message(error_text(error));
     }
@@ -516,13 +754,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       if (name_modal.kind === "vault") {
         const opened = await api.vault_create(name_modal.vault_parent, name);
-        set_vault_path(opened);
-        set_tabs([]);
-        set_active_path(null);
-        set_split_path(null);
-        set_bodies({});
-        set_views({});
-        await refresh_indexes();
+        await finish_open(opened);
+      } else if (name_modal.kind === "project") {
+        const next = await api.project_rename(name_modal.target_path, name);
+        settings_ref.current = { ...settings_ref.current, projects: next };
+        set_projects(next);
       } else if (name_modal.kind === "note") {
         const path = await api.note_create(name_modal.parent_path, name);
         await refresh_indexes();
@@ -784,6 +1020,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       backlinks,
       update_result,
       scroll_line,
+      projects,
+      projects_open,
+      project_name,
+      open_projects: () => set_projects_open(true),
+      close_projects: () => set_projects_open(false),
+      open_project,
+      close_project,
+      forget_project,
+      ask_rename_project,
+      import_files,
+      import_folder,
+      export_project,
+      export_path,
+      export_current_note,
       open_vault_dialog,
       create_vault_dialog,
       open_note,
@@ -904,6 +1154,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       update_result,
       scroll_line,
       selected_dir,
+      projects,
+      projects_open,
+      project_name,
     ],
   );
 

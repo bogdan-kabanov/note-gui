@@ -65,6 +65,16 @@ export function FileTree() {
             type="button"
             className="menu-item"
             onClick={() => {
+              void app.export_path(menu.node.path);
+              set_menu(null);
+            }}
+          >
+            Экспортировать
+          </button>
+          <button
+            type="button"
+            className="menu-item"
+            onClick={() => {
               app.ask_delete(menu.node.path);
               set_menu(null);
             }}

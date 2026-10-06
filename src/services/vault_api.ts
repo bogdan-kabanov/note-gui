@@ -8,8 +8,10 @@ import type {
   note_view,
   search_hit,
   tag_info,
+  transfer_result,
   tree_node,
   update_check_result,
+  vault_project,
 } from "../types";
 
 export function settings_get(): Promise<app_settings> {
@@ -30,6 +32,30 @@ export function vault_open(path: string): Promise<string> {
 
 export function vault_create(parent: string, name: string): Promise<string> {
   return invoke("vault_create", { parent, name });
+}
+
+export function vault_close(): Promise<void> {
+  return invoke("vault_close");
+}
+
+export function project_rename(path: string, name: string): Promise<vault_project[]> {
+  return invoke("project_rename", { path, name });
+}
+
+export function project_forget(path: string): Promise<vault_project[]> {
+  return invoke("project_forget", { path });
+}
+
+export function files_import(source_paths: string[], parent: string): Promise<transfer_result> {
+  return invoke("files_import", { source_paths, parent });
+}
+
+export function files_export(relative_paths: string[], destination: string): Promise<transfer_result> {
+  return invoke("files_export", { relative_paths, destination });
+}
+
+export function note_export(path: string, destination: string): Promise<void> {
+  return invoke("note_export", { path, destination });
 }
 
 export function tree_list(): Promise<tree_node[]> {

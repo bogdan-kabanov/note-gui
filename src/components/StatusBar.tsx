@@ -6,7 +6,7 @@ export function StatusBar() {
   const theme_label = app.resolved_theme === "dark" ? "Тёмная" : "Светлая";
   return (
     <footer className="status-bar">
-      <span>{app.vault_path ?? "Хранилище не открыто"}</span>
+      <span title={app.vault_path ?? ""}>{app.project_name ? app.project_name : "Проект не открыт"}</span>
       <span>{app.status_message}</span>
       <span>{app.focused_path ? `${app.word_count} сл.` : ""}</span>
       <span className="spacer" />

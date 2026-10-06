@@ -1,6 +1,6 @@
 [package]
 name = "note_gui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Локальная записная книжка"
 authors = ["note-gui"]
 edition = "2021"

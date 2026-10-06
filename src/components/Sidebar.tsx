@@ -20,6 +20,19 @@ export function Sidebar() {
               Папка
             </button>
           </div>
+          {app.vault_path ? (
+            <div className="panel-actions">
+              <button type="button" className="text-button" onClick={() => void app.import_files()}>
+                Импорт
+              </button>
+              <button type="button" className="text-button" onClick={() => void app.import_folder()}>
+                Из папки
+              </button>
+              <button type="button" className="text-button" onClick={() => void app.export_project()}>
+                Экспорт
+              </button>
+            </div>
+          ) : null}
           {app.vault_path ? <FileTree /> : <p className="empty-copy">Хранилище не открыто</p>}
         </>
       ) : null}
